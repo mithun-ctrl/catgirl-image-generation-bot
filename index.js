@@ -124,7 +124,7 @@ function startImageGeneration(chatId) {
     // Set up interval for subsequent images
     const interval = setInterval(() => {
         sendRandomImage(chatId);
-    }, 30000);
+    }, 300000);
     
     activeSessions.set(chatId, interval);
     saveSessions();
@@ -285,11 +285,11 @@ async function sendRandomImage(chatId) {
         const timestamp = Date.now();
         const filename = `image_${timestamp}.${extension}`;
 
-        // Updated sendPhoto options to fix deprecation warning
-        await bot.sendPhoto(chatId, {
-            source: Buffer.from(response.data),
+        await bot.sendPhoto(chatId, Buffer.from(response.data), {
             filename: filename,
-            contentType: contentType || 'image/jpeg' // Explicitly set content-type
+            contentType: contentType
+        }, {
+            filename: filename
         });
     } catch (error) {
         console.error('Error sending image:', error);
@@ -316,8 +316,7 @@ process.on('SIGTERM', () => {
 });
 
 // Disable the deprecation warning
-process.env.NTBA_FIX_319 = '1';
-process.env.NTBA_FIX_350 = '1';
+process.env.NTBA_FIX_319 = 1;
 
 // Load saved sessions and preferences on startup
 loadSavedData();
