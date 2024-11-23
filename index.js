@@ -285,11 +285,11 @@ async function sendRandomImage(chatId) {
         const timestamp = Date.now();
         const filename = `image_${timestamp}.${extension}`;
 
-        await bot.sendPhoto(chatId, Buffer.from(response.data), {
+        // Updated sendPhoto options to fix deprecation warning
+        await bot.sendPhoto(chatId, {
+            source: Buffer.from(response.data),
             filename: filename,
-            contentType: contentType
-        }, {
-            filename: filename
+            contentType: contentType || 'image/jpeg' // Explicitly set content-type
         });
     } catch (error) {
         console.error('Error sending image:', error);
