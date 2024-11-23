@@ -6,20 +6,42 @@ const express = require('express');
 dotenv.config();
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
-let bot;
+const bot = new TelegramBot(token, { polling: true });
 
-// Different bot configuration for production and development
-if (process.env.NODE_ENV === 'production') {
-    bot = new TelegramBot(token, { polling: true });
-} else {
-    bot = new TelegramBot(token, { polling: true });
-}
-
-// API endpoint
-const API_URL = 'https://api.nekosia.cat/api/v1/images/catgirl';
+// API configuration
+const BASE_URL = 'https://api.nekosia.cat/api/v1';
+const API_CONFIG = {
+    category: 'catgirl',
+    params: {
+        count: 1,
+        rating: 'safe',
+        additionalTags: 'cute',
+        blacklistedTags: 'nsfw,suggestive'
+    }
+};
 
 // Store active intervals
 const activeIntervals = new Map();
+
+// Function to fetch image from API
+async function fetchImage() {
+    const url = `${BASE_URL}/images/${API_CONFIG.category}`;
+    const params = new URLSearchParams(API_CONFIG.params);
+    
+    const response = await axios.get(`${url}?${params}`, {
+        timeout: 10000,
+        headers: {
+            'Accept': 'application/json',
+            'User-Agent': 'TelegramBot/1.0'
+        }
+    });
+
+    if (!response.data || !Array.isArray(response.data) || response.data.length === 0) {
+        throw new Error('Invalid API response');
+    }
+
+    return response.data[0];
+}
 
 // Function to send catgirl image
 async function sendCatgirlImage(chatId) {
@@ -27,26 +49,17 @@ async function sendCatgirlImage(chatId) {
         // Send a "generating" message
         const loadingMessage = await bot.sendMessage(chatId, '🐱 Generating a cute catgirl image...');
         
-        // Fetch image from API with proper error handling
-        const response = await axios.get(API_URL, {
-            timeout: 10000, // 10 second timeout
-            headers: {
-                'Accept': 'application/json',
-                'User-Agent': 'TelegramBot/1.0'
-            }
-        });
-
-        // Check if response has the expected structure
-        if (response.data && response.data.url) {
-            const imageUrl = response.data.url;
-            
-            // Send the image
-            await bot.sendPhoto(chatId, imageUrl, {
-                caption: '🎀 Here\'s your catgirl image!\n\nUse /stop to stop generating images'
-            });
-        } else {
-            throw new Error('Invalid API response format');
+        // Fetch image from API
+        const imageData = await fetchImage();
+        
+        if (!imageData || !imageData.url) {
+            throw new Error('No image URL in response');
         }
+
+        // Send the image with source info
+        await bot.sendPhoto(chatId, imageData.url, {
+            caption: `🎀 Here's your catgirl image!\n${imageData.source || ''}\n\nUse /stop to stop generating images`
+        });
         
         // Delete the loading message
         await bot.deleteMessage(chatId, loadingMessage.message_id).catch(() => {
@@ -55,10 +68,17 @@ async function sendCatgirlImage(chatId) {
         
     } catch (error) {
         console.error('Error in sendCatgirlImage:', error.message);
+        let errorMessage = '😿 Sorry, there was an error generating the image. Trying again in 15 seconds!';
         
-        // Send error message to user
+        if (error.response) {
+            console.error('API Error Response:', error.response.data);
+            if (error.response.status === 429) {
+                errorMessage = '😿 We are being rate limited. Please try again later!';
+            }
+        }
+        
         try {
-            await bot.sendMessage(chatId, '😿 Sorry, there was an error generating the image. Trying again in 15 seconds!');
+            await bot.sendMessage(chatId, errorMessage);
         } catch (sendError) {
             console.error('Error sending error message:', sendError.message);
         }
@@ -76,8 +96,14 @@ bot.onText(/\/start/, async (msg) => {
             activeIntervals.delete(chatId);
         }
         
-        // Send initial message
-        await bot.sendMessage(chatId, '🌟 Starting automatic catgirl image generation every 15 seconds!\n\nUse /stop to stop generating images');
+        // Send welcome message
+        await bot.sendMessage(
+            chatId,
+            '🌟 Welcome to the Catgirl Image Generator Bot!\n\n' +
+            '🎀 I will send you cute catgirl images every 15 seconds.\n' +
+            '✨ All images are safe for work and family-friendly.\n\n' +
+            'Use /stop to stop generating images.'
+        );
         
         // Send first image immediately
         await sendCatgirlImage(chatId);
@@ -85,13 +111,14 @@ bot.onText(/\/start/, async (msg) => {
         // Set up interval for subsequent images
         const interval = setInterval(() => {
             sendCatgirlImage(chatId);
-        }, 15000); // 15 seconds
+        }, 15000);
         
         // Store the interval
         activeIntervals.set(chatId, interval);
         
     } catch (error) {
         console.error('Error in start command:', error.message);
+        await bot.sendMessage(chatId, '😿 Sorry, something went wrong. Please try again later!');
     }
 });
 
@@ -112,7 +139,7 @@ bot.onText(/\/stop/, async (msg) => {
     }
 });
 
-// Clean up intervals when bot stops
+// Clean up on shutdown
 process.on('SIGINT', () => {
     activeIntervals.forEach((interval) => {
         clearInterval(interval);
@@ -125,7 +152,7 @@ bot.on('polling_error', (error) => {
     console.error('Polling error:', error.message);
 });
 
-// Express server setup
+// Express server for Railway
 const app = express();
 const port = process.env.PORT || 3000;
 
@@ -137,7 +164,7 @@ app.listen(port, () => {
     console.log(`Server is running on port ${port}`);
 });
 
-// General error handling
+// Error handling
 process.on('unhandledRejection', (error) => {
     console.error('Unhandled Promise Rejection:', error.message);
 });

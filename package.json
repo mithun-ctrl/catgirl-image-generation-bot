@@ -18,6 +18,7 @@
     "axios": "^1.6.2",
     "dotenv": "^16.3.1",
     "express": "^4.21.1",
+    "nekosia.js": "^0.1.5",
     "node-telegram-bot-api": "^0.64.0"
   },
   "devDependencies": {
