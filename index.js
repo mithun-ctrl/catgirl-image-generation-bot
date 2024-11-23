@@ -1,17 +1,65 @@
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
+const fs = require('fs');
 require('dotenv').config();
 
 // Bot configuration
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const bot = new TelegramBot(token, { polling: true });
 
-// Admin configuration - Add these to your .env file
+// Admin configuration
 const ADMIN_IDS = (process.env.ADMIN_IDS || '').split(',').map(id => Number(id));
 const OWNER_ID = Number(process.env.OWNER_ID);
 
+// File paths for persistent storage
+const SESSIONS_FILE = 'active_sessions.json';
+const PREFERENCES_FILE = 'user_preferences.json';
+
 // Store active generation sessions and their intervals
 const activeSessions = new Map();
+
+// Load saved sessions and preferences
+function loadSavedData() {
+    try {
+        if (fs.existsSync(SESSIONS_FILE)) {
+            const sessions = JSON.parse(fs.readFileSync(SESSIONS_FILE));
+            sessions.forEach(chatId => {
+                startImageGeneration(Number(chatId));
+            });
+            console.log('Restored sessions:', sessions);
+        }
+
+        if (fs.existsSync(PREFERENCES_FILE)) {
+            const preferences = JSON.parse(fs.readFileSync(PREFERENCES_FILE));
+            Object.entries(preferences).forEach(([chatId, category]) => {
+                userPreferences.set(Number(chatId), category);
+            });
+            console.log('Restored preferences');
+        }
+    } catch (error) {
+        console.error('Error loading saved data:', error);
+    }
+}
+
+// Save active sessions to file
+function saveSessions() {
+    try {
+        const sessions = Array.from(activeSessions.keys());
+        fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessions));
+    } catch (error) {
+        console.error('Error saving sessions:', error);
+    }
+}
+
+// Save user preferences to file
+function savePreferences() {
+    try {
+        const preferences = Object.fromEntries(userPreferences);
+        fs.writeFileSync(PREFERENCES_FILE, JSON.stringify(preferences));
+    } catch (error) {
+        console.error('Error saving preferences:', error);
+    }
+}
 
 // Categories list
 const categories = [
@@ -48,11 +96,8 @@ function commandMiddleware(handler) {
         
         if (!isAuthorized(userId)) {
             await bot.sendMessage(chatId, '⚠️ You are not authorized to use this bot. Please contact the bot owner.');
-            // Notify owner of unauthorized access attempt
-            const username = msg.from.username ? `@${msg.from.username}` : 'No username';
-            const name = msg.from.first_name || 'Unknown';
             await bot.sendMessage(OWNER_ID, 
-                `⚠️ Unauthorized access attempt:\nUser ID: ${userId}\nUsername: ${username}\nName: ${name}`
+                `⚠️ Unauthorized access attempt:\nUser ID: ${userId}\nUsername: ${msg.from.username || 'No username'}\nName: ${msg.from.first_name || 'Unknown'}`
             );
             return;
         }
@@ -67,12 +112,28 @@ function generateImageUrl(category = '') {
     return category ? `${baseUrl}?${category}` : baseUrl;
 }
 
+// Start image generation function
+function startImageGeneration(chatId) {
+    if (activeSessions.has(chatId)) {
+        clearInterval(activeSessions.get(chatId));
+    }
+
+    // Send first image immediately
+    sendRandomImage(chatId);
+    
+    // Set up interval for subsequent images
+    const interval = setInterval(() => {
+        sendRandomImage(chatId);
+    }, 300000);
+    
+    activeSessions.set(chatId, interval);
+    saveSessions();
+}
+
 // Admin commands
 bot.onText(/\/admin/, async (msg) => {
     const userId = msg.from.id;
-    if (userId !== OWNER_ID) {
-        return;
-    }
+    if (userId !== OWNER_ID) return;
     
     const adminList = ADMIN_IDS.join('\n');
     await bot.sendMessage(userId, 
@@ -83,12 +144,9 @@ bot.onText(/\/admin/, async (msg) => {
     );
 });
 
-// Add admin command (owner only)
 bot.onText(/\/addadmin (.+)/, async (msg, match) => {
     const userId = msg.from.id;
-    if (userId !== OWNER_ID) {
-        return;
-    }
+    if (userId !== OWNER_ID) return;
     
     const newAdminId = Number(match[1]);
     if (!ADMIN_IDS.includes(newAdminId)) {
@@ -99,12 +157,9 @@ bot.onText(/\/addadmin (.+)/, async (msg, match) => {
     }
 });
 
-// Remove admin command (owner only)
 bot.onText(/\/removeadmin (.+)/, async (msg, match) => {
     const userId = msg.from.id;
-    if (userId !== OWNER_ID) {
-        return;
-    }
+    if (userId !== OWNER_ID) return;
     
     const adminToRemove = Number(match[1]);
     const index = ADMIN_IDS.indexOf(adminToRemove);
@@ -116,12 +171,9 @@ bot.onText(/\/removeadmin (.+)/, async (msg, match) => {
     }
 });
 
-// List admins command (owner only)
 bot.onText(/\/listadmins/, async (msg) => {
     const userId = msg.from.id;
-    if (userId !== OWNER_ID) {
-        return;
-    }
+    if (userId !== OWNER_ID) return;
     
     const adminList = ADMIN_IDS.join('\n');
     await bot.sendMessage(userId, `Current Admins:\n${adminList}`);
@@ -151,22 +203,8 @@ bot.onText(/\/showcategories/, commandMiddleware((msg) => {
 // Start generation command handler
 bot.onText(/\/startgen/, commandMiddleware((msg) => {
     const chatId = msg.chat.id;
-    
-    if (activeSessions.has(chatId)) {
-        bot.sendMessage(chatId, 'Image generation is already running!');
-        return;
-    }
-
-    const category = userPreferences.get(chatId);
+    startImageGeneration(chatId);
     bot.sendMessage(chatId, 'Starting image generation...');
-    
-    sendRandomImage(chatId);
-    
-    const interval = setInterval(() => {
-        sendRandomImage(chatId);
-    }, 300000);
-    
-    activeSessions.set(chatId, interval);
 }));
 
 // Stop generation command handler
@@ -176,6 +214,7 @@ bot.onText(/\/stopgen/, commandMiddleware((msg) => {
     if (activeSessions.has(chatId)) {
         clearInterval(activeSessions.get(chatId));
         activeSessions.delete(chatId);
+        saveSessions();
         bot.sendMessage(chatId, 'Image generation stopped.');
     } else {
         bot.sendMessage(chatId, 'No active image generation to stop.');
@@ -222,6 +261,7 @@ bot.on('callback_query', async (callbackQuery) => {
     if (data.startsWith('category:')) {
         const category = data.split(':')[1];
         userPreferences.set(chatId, category);
+        savePreferences();
         await bot.answerCallbackQuery(callbackQuery.id);
         bot.sendMessage(chatId, `Category set to: ${category}`);
     }
@@ -262,7 +302,23 @@ bot.on('polling_error', (error) => {
     console.error('Polling error:', error);
 });
 
+// Handle process termination
+process.on('SIGINT', () => {
+    saveSessions();
+    savePreferences();
+    process.exit();
+});
+
+process.on('SIGTERM', () => {
+    saveSessions();
+    savePreferences();
+    process.exit();
+});
+
 // Disable the deprecation warning
 process.env.NTBA_FIX_319 = 1;
+
+// Load saved sessions and preferences on startup
+loadSavedData();
 
 console.log('Bot is running...');
