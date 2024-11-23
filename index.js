@@ -316,7 +316,8 @@ process.on('SIGTERM', () => {
 });
 
 // Disable the deprecation warning
-process.env.NTBA_FIX_319 = 1;
+process.env.NTBA_FIX_319 = '1';
+process.env.NTBA_FIX_350 = '1';
 
 // Load saved sessions and preferences on startup
 loadSavedData();
