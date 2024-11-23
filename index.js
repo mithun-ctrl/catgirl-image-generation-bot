@@ -164,7 +164,7 @@ bot.onText(/\/startgen/, commandMiddleware((msg) => {
     
     const interval = setInterval(() => {
         sendRandomImage(chatId);
-    }, 30000);
+    }, 300000);
     
     activeSessions.set(chatId, interval);
 }));
