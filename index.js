@@ -2,6 +2,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const fs = require('fs');
 require('dotenv').config();
+const botMonitor = require('./activity/monitor');
 
 // Bot configuration
 const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -181,7 +182,10 @@ bot.onText(/\/listadmins/, async (msg) => {
 
 // Start command handler
 bot.onText(/\/start/, commandMiddleware((msg) => {
+    
     const chatId = msg.chat.id;
+    botMonitor.incrementMessageCount('message');
+
     const message = `Welcome to the Random Image Generator Bot!\n\n` +
         `Commands:\n` +
         `/startgen - Start image generation\n` +
@@ -244,6 +248,18 @@ bot.onText(/\/currentcategory/, commandMiddleware((msg) => {
     bot.sendMessage(chatId, `Your current category: ${currentCategory}`);
 }));
 
+bot.onText(/\/status/, commandMiddleware((msg) =>{
+
+    const userId = msg.from.id
+    const chatId = msg.chat.id
+    if (userId !== OWNER_ID) {
+        bot.sendMessage(chatId, '⚠️ This command is restricted to the bot owner.');
+        return;
+    }
+    const report = botMonitor.generateReport()
+    bot.sendMessage(chatId, report)
+}));
+
 // Category selection callback handler
 bot.on('callback_query', async (callbackQuery) => {
     const userId = callbackQuery.from.id;
@@ -291,9 +307,12 @@ async function sendRandomImage(chatId) {
         }, {
             filename: filename
         });
+        botMonitor.incrementMessageCount('image')
     } catch (error) {
         console.error('Error sending image:', error);
         bot.sendMessage(chatId, 'Error generating image. Please try again.');
+
+        botMonitor.incrementMessageCount('error')
     }
 }
 
