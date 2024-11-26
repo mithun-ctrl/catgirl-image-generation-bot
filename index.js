@@ -125,7 +125,7 @@ function startImageGeneration(chatId) {
     // Set up interval for subsequent images
     const interval = setInterval(() => {
         sendRandomImage(chatId);
-    }, 300000);
+    }, 216000);
     
     activeSessions.set(chatId, interval);
     saveSessions();
