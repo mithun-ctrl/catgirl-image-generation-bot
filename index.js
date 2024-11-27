@@ -3,23 +3,27 @@ const axios = require('axios');
 const fs = require('fs');
 require('dotenv').config();
 const botMonitor = require('./activity/monitor');
+const databaseConnection = require("./database/db")
+const Admin = require("./models/admin")
+const Waifu = require("./models/waifu")
 
-// Bot configuration
+databaseConnection();
+
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const bot = new TelegramBot(token, { polling: true });
 
-// Admin configuration
+
 const ADMIN_IDS = (process.env.ADMIN_IDS || '').split(',').map(id => Number(id));
 const OWNER_ID = Number(process.env.OWNER_ID);
 
-// File paths for persistent storage
+
 const SESSIONS_FILE = 'active_sessions.json';
 const PREFERENCES_FILE = 'user_preferences.json';
 
-// Store active generation sessions and their intervals
+
 const activeSessions = new Map();
 
-// Load saved sessions and preferences
+
 function loadSavedData() {
     try {
         if (fs.existsSync(SESSIONS_FILE)) {
@@ -42,7 +46,7 @@ function loadSavedData() {
     }
 }
 
-// Save active sessions to file
+
 function saveSessions() {
     try {
         const sessions = Array.from(activeSessions.keys());
@@ -52,7 +56,7 @@ function saveSessions() {
     }
 }
 
-// Save user preferences to file
+
 function savePreferences() {
     try {
         const preferences = Object.fromEntries(userPreferences);
@@ -62,7 +66,7 @@ function savePreferences() {
     }
 }
 
-// Categories list
+
 const categories = [
     'long_hair',
     'original',
@@ -81,15 +85,14 @@ const categories = [
     'tail'
 ];
 
-// User preferences storage
 const userPreferences = new Map();
 
-// Security middleware
+
 function isAuthorized(userId) {
     return ADMIN_IDS.includes(userId) || userId === OWNER_ID;
 }
 
-// Command handler middleware
+
 function commandMiddleware(handler) {
     return async (msg, match) => {
         const userId = msg.from.id;
@@ -110,7 +113,9 @@ function commandMiddleware(handler) {
 // Generate random image URL with category
 function generateImageUrl(category = '') {
     const baseUrl = 'https://pic.re/image';
-    return category ? `${baseUrl}?${category}` : baseUrl;
+    // Handle cases where category might be an object or undefined
+    const categoryParam = typeof category === 'object' ? category.category : category;
+    return categoryParam ? `${baseUrl}?${categoryParam}` : baseUrl;
 }
 
 // Start image generation function
@@ -145,42 +150,114 @@ bot.onText(/\/admin/, async (msg) => {
     );
 });
 
-bot.onText(/\/addadmin (.+)/, async (msg, match) => {
+bot.onText(/\/addadmin/, async (msg) => {
     const userId = msg.from.id;
-    if (userId !== OWNER_ID) return;
-    
-    const newAdminId = Number(match[1]);
-    if (!ADMIN_IDS.includes(newAdminId)) {
-        ADMIN_IDS.push(newAdminId);
-        await bot.sendMessage(userId, `✅ Admin added: ${newAdminId}`);
-    } else {
-        await bot.sendMessage(userId, `⚠️ User ${newAdminId} is already an admin`);
+    const chatId = msg.chat.id;
+
+    if (userId !== OWNER_ID) {
+        await bot.sendMessage(chatId, '⚠️ This command is restricted to the bot owner.');
+        return;
     }
+
+    await bot.sendMessage(chatId, 'Please forward a message from the user you want to add as an admin.');
+
+    // Set up a one-time message listener for forwarded message
+    bot.once('message', async (forwardedMsg) => {
+        if (!forwardedMsg.forward_from) {
+            await bot.sendMessage(chatId, '❌ No user information found. Please forward a message from the user.');
+            return;
+        }
+
+        const newAdminId = forwardedMsg.forward_from.id;
+        const username = forwardedMsg.forward_from.username;
+
+        try {
+            // Check if admin already exists
+            const existingAdmin = await Admin.findOne({ userId: newAdminId });
+            if (existingAdmin) {
+                await bot.sendMessage(chatId, `⚠️ User ${newAdminId} is already an admin`);
+                return;
+            }
+
+            // Create new admin
+            const newAdmin = new Admin({ 
+                userId: newAdminId, 
+                username: username 
+            });
+            await newAdmin.save();
+
+            await bot.sendMessage(chatId, `✅ Admin added: ${newAdminId} (${username || 'No username'})`);
+        } catch (error) {
+            console.error('Error adding admin:', error);
+            await bot.sendMessage(chatId, '❌ Failed to add admin. Please try again.');
+        }
+    });
 });
 
-bot.onText(/\/removeadmin (.+)/, async (msg, match) => {
+bot.onText(/\/removeadmin/, async (msg) => {
     const userId = msg.from.id;
-    if (userId !== OWNER_ID) return;
-    
-    const adminToRemove = Number(match[1]);
-    const index = ADMIN_IDS.indexOf(adminToRemove);
-    if (index > -1) {
-        ADMIN_IDS.splice(index, 1);
-        await bot.sendMessage(userId, `✅ Admin removed: ${adminToRemove}`);
-    } else {
-        await bot.sendMessage(userId, `⚠️ User ${adminToRemove} is not an admin`);
+    const chatId = msg.chat.id;
+
+    if (userId !== OWNER_ID) {
+        await bot.sendMessage(chatId, '⚠️ This command is restricted to the bot owner.');
+        return;
     }
+
+    await bot.sendMessage(chatId, 'Please forward a message from the admin you want to remove.');
+
+    // Set up a one-time message listener for forwarded message
+    bot.once('message', async (forwardedMsg) => {
+        if (!forwardedMsg.forward_from) {
+            await bot.sendMessage(chatId, '❌ No user information found. Please forward a message from the user.');
+            return;
+        }
+
+        const adminToRemove = forwardedMsg.forward_from.id;
+
+        try {
+            const result = await Admin.findOneAndDelete({ userId: adminToRemove });
+            
+            if (result) {
+                await bot.sendMessage(chatId, `✅ Admin removed: ${adminToRemove}`);
+            } else {
+                await bot.sendMessage(chatId, `⚠️ User ${adminToRemove} is not an admin`);
+            }
+        } catch (error) {
+            console.error('Error removing admin:', error);
+            await bot.sendMessage(chatId, '❌ Failed to remove admin. Please try again.');
+        }
+    });
 });
 
 bot.onText(/\/listadmins/, async (msg) => {
     const userId = msg.from.id;
-    if (userId !== OWNER_ID) return;
+    const chatId = msg.chat.id;
+
+    if (userId !== OWNER_ID) {
+        await bot.sendMessage(chatId, '⚠️ This command is restricted to the bot owner.');
+        return;
+    }
     
-    const adminList = ADMIN_IDS.join('\n');
-    await bot.sendMessage(userId, `Current Admins:\n${adminList}`);
+    try {
+        const admins = await Admin.find({});
+        const adminList = admins.map(admin => 
+            `ID: ${admin.userId}, Username: ${admin.username || 'No username'}`
+        ).join('\n');
+        
+        await bot.sendMessage(chatId, `Current Admins:\n${adminList || 'No admins found'}`);
+    } catch (error) {
+        console.error('Error listing admins:', error);
+        await bot.sendMessage(chatId, '❌ Failed to retrieve admin list.');
+    }
 });
 
-// Start command handler
+
+// Favorite command handler
+bot.onText(/\/fav/, commandMiddleware((msg) => {
+    const chatId = msg.chat.id;
+    bot.sendMessage(chatId, 'Reply to an image with /fav to save it to your waifu collection!');
+}));
+
 bot.onText(/\/start/, commandMiddleware((msg) => {
     
     const chatId = msg.chat.id;
@@ -263,27 +340,94 @@ bot.onText(/\/status/, commandMiddleware((msg) =>{
 // Category selection callback handler
 bot.on('callback_query', async (callbackQuery) => {
     const userId = callbackQuery.from.id;
-    if (!isAuthorized(userId)) {
+    const chatId = callbackQuery.message.chat.id;
+    const data = callbackQuery.data;
+
+    if (!await isAuthorized(userId)) {
         await bot.answerCallbackQuery(callbackQuery.id, {
             text: 'You are not authorized to use this bot.',
             show_alert: true
         });
         return;
     }
-    
-    const chatId = callbackQuery.message.chat.id;
-    const data = callbackQuery.data;
-    
-    if (data.startsWith('category:')) {
+
+    if (data.startsWith('waifu_category:')) {
         const category = data.split(':')[1];
-        userPreferences.set(chatId, category);
-        savePreferences();
+        
+        // Temporarily store category in user preferences
+        userPreferences.set(chatId, { 
+            type: 'waifu_category', 
+            category 
+        });
+
         await bot.answerCallbackQuery(callbackQuery.id);
-        bot.sendMessage(chatId, `Category set to: ${category}`);
+        await bot.sendMessage(chatId, `Category set to: ${category}. Now send me the name of your waifu.`);
     }
 });
 
-// Function to send random image
+bot.on('inline_query', async (inlineQuery) => {
+    try {
+        const userId = inlineQuery.from.id;
+        
+        // Fetch user's waifus
+        const waifus = await Waifu.find({ userId });
+        
+        // Create inline query results
+        const results = waifus.map((waifu, index) => ({
+            type: 'photo',
+            id: waifu._id.toString(),
+            photo_url: waifu.imageUrl,
+            thumb_url: waifu.imageUrl,
+            caption: `Waifu #${index + 1}: ${waifu.name || 'Unnamed'}`,
+            title: waifu.name || `Waifu #${index + 1}`,
+        }));
+
+        // Respond to inline query
+        await bot.answerInlineQuery(inlineQuery.id, results, {
+            cache_time: 0
+        });
+    } catch (error) {
+        console.error('Inline query error:', error);
+    }
+});
+
+bot.on('message', async (msg) => {
+    // Check if the message is a reply to the /fav command
+    if (msg.reply_to_message && msg.text === '/fav') {
+        const userId = msg.from.id;
+        const chatId = msg.chat.id;
+
+        try {
+            // Check if the replied message has a photo
+            if (!msg.reply_to_message.photo) {
+                await bot.sendMessage(chatId, 'Please reply to an image to save it as a waifu.');
+                return;
+            }
+
+            // Get the largest photo
+            const photo = msg.reply_to_message.photo[msg.reply_to_message.photo.length - 1];
+            
+            // Get the file details
+            const file = await bot.getFile(photo.file_id);
+            const fileUrl = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+
+            // Save waifu to database
+            const newWaifu = new Waifu({
+                userId,
+                name: msg.reply_to_message.caption || 'Unnamed Waifu',
+                imageUrl: fileUrl,
+                category: 'custom'
+            });
+            await newWaifu.save();
+
+            await bot.sendMessage(chatId, '💕 Waifu added to your collection!');
+        } catch (error) {
+            console.error('Error saving waifu:', error);
+            await bot.sendMessage(chatId, '❌ Failed to save waifu. Please try again.');
+        }
+    }
+});
+
 async function sendRandomImage(chatId) {
     try {
         const category = userPreferences.get(chatId);
